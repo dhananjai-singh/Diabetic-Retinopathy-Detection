@@ -1,20 +1,19 @@
-# Diabetic Retinopathy Detection Dashboard
+# Diabetic Retinopathy Detection
 
-A web dashboard for **AI-assisted diabetic retinopathy (DR) screening**. A clinician uploads a retinal fundus image, the app runs it through a classifier, and the result shows the predicted DR stage, the model's confidence and a risk level. It also shows a **Grad-CAM heatmap** that highlights which regions of the retina drove the prediction.
+An end-to-end deep learning system that **detects and grades diabetic retinopathy (DR)** from retinal fundus images. It also explains its predictions with **Grad-CAM** heatmaps, so a clinician can see which parts of the retina drove the result.
 
-> **Status:** this repository is the front end. Analysis currently returns a **mock prediction** so the full flow can be demoed. Connect it to a real model API to use it for actual screening (see below).
+Diabetic retinopathy is one of the leading causes of preventable blindness. Early detection matters, but large-scale screening is limited by how few ophthalmologists are available. This project goes from raw images to a screening tool: preprocessing, model training, explainability and a web interface.
 
-## Features
+## What's inside
 
-- Drag-and-drop or click-to-upload for retinal images (JPG/PNG)
-- Animated analysis progress
-- Results card: DR stage (0 to 4), stage name, confidence and a colour-coded risk badge (low / medium / high)
-- **Explainability**: a Grad-CAM heatmap overlay with a short explanation of how to read it
-- Responsive, accessible UI with light/dark theme support
+| Part | Folder | What it does |
+| --- | --- | --- |
+| **Model** | [`model/`](model) | PyTorch pipeline: data exploration, preprocessing, a baseline CNN, a ResNet-50 transfer-learning model, Grad-CAM, and a Gradio demo app |
+| **Dashboard** | [`dashboard/`](dashboard) | Next.js web dashboard for uploading images and viewing the predicted stage, confidence, risk level and Grad-CAM overlay |
 
-### DR stages
+## DR severity classes
 
-| Stage | Name |
+| Label | Stage |
 | --- | --- |
 | 0 | No DR |
 | 1 | Mild NPDR |
@@ -22,67 +21,111 @@ A web dashboard for **AI-assisted diabetic retinopathy (DR) screening**. A clini
 | 3 | Severe NPDR |
 | 4 | Proliferative DR |
 
-*NPDR = non-proliferative diabetic retinopathy.*
+## Pipeline
 
-## Tech stack
+```
+APTOS 2019 fundus images
+        │
+        ▼
+preprocessing.py   circular crop · resize 512×512 · CLAHE contrast · normalise · 70/15/15 split → .npy
+        │
+        ├──▶ train_baseline_cnn.py   custom CNN from scratch (BatchNorm, Dropout, GAP, class-weighted loss)
+        └──▶ train_resnet50.py       ResNet-50 (ImageNet) + 2048→512→5 head, Focal Loss for class imbalance
+                │
+                ▼
+        gradcam.py    heatmaps on the last conv layer + attention statistics
+                │
+                ▼
+        app.py (Gradio)  /  dashboard (Next.js)   upload → stage, confidence, clinical note, heatmap
+```
 
-- [Next.js 16](https://nextjs.org) (App Router) + React 19 + TypeScript
-- Tailwind CSS
-- [shadcn/ui](https://ui.shadcn.com) components (Radix UI) + lucide-react icons
+### Training details
+
+| | Baseline CNN | ResNet-50 |
+| --- | --- | --- |
+| Input | 512 × 512 | 512 × 512 |
+| Batch size | 16 | 16 |
+| Epochs | up to 50 | up to 30 |
+| Learning rate | 1e-3 | 1e-4 |
+| Loss | Class-weighted cross-entropy | Focal loss (γ = 2) with class weights |
+| Optimizer | Adam + ReduceLROnPlateau | Adam + ReduceLROnPlateau |
+| Early stopping | patience 10 | patience 10 |
+| Checkpoint | `models/best_model.pth` | `models/resnet50_best.pth` |
+
+Evaluation covers accuracy, precision, recall, F1, the confusion matrix and per-class accuracy, with particular attention to catching early-stage disease and keeping false negatives low.
 
 ## Getting started
 
-### Prerequisites
-
-- Node.js 20+
-- [pnpm](https://pnpm.io) (or npm / yarn)
-
-### Install and run
+### 1. Model
 
 ```bash
-pnpm install
+cd model
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# Linux / macOS
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+Download the [APTOS 2019 Blindness Detection](https://www.kaggle.com/competitions/aptos2019-blindness-detection/data) dataset from Kaggle, then put `train.csv` and the `train_images/` folder inside `model/`. Run the scripts in this order:
+
+```bash
+python exploration.py          # class balance, image properties, quality checks
+python preprocessing.py        # → preprocessed_data/ (train/val/test splits)
+python train_baseline_cnn.py   # → models/best_model.pth, results/
+python train_resnet50.py       # → models/resnet50_best.pth, results/
+python gradcam.py              # → results/gradcam/
+```
+
+A GPU is strongly recommended for training.
+
+### 2. Gradio demo
+
+```bash
+cd model
+python app.py
+```
+
+It loads `models/resnet50_best.pth` by default. To use weights stored somewhere else, set the `MODEL_PATH` environment variable.
+
+### 3. Web dashboard
+
+```bash
+cd dashboard
+pnpm install     # or npm install
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000). The dashboard currently returns a mock prediction. To connect it to the trained model, see [`dashboard/README.md`](dashboard/README.md).
 
-### Other scripts
-
-```bash
-pnpm build    # production build
-pnpm start    # serve the production build
-pnpm lint     # lint
-```
-
-## Connecting a real model
-
-The mock call is in `handleAnalyze` in `app/page.tsx`. Replace the `setTimeout` block with a request to your inference service. It should return:
-
-```ts
-{
-  stage: number          // 0–4
-  stageName: string      // e.g. "Moderate NPDR"
-  confidence: number     // 0–100
-  riskLevel: "low" | "medium" | "high"
-  gradcamUrl: string     // URL or data URI of the Grad-CAM overlay
-}
-```
-
-A typical backend is a CNN (e.g. EfficientNet or ResNet) trained on a public fundus dataset such as APTOS 2019 or EyePACS, served with FastAPI or Flask, with Grad-CAM generated from the final convolutional layer.
-
-## Project structure
+## Repository layout
 
 ```
-app/                     Layout, global styles and the dashboard page
-components/
-  image-upload.tsx       Upload area + heatmap view
-  prediction-results.tsx Stage / confidence / risk card
-  explainability-section.tsx  Grad-CAM explanation
-  ui/                    shadcn/ui components
-hooks/  lib/             Small utilities
-public/                  Icons and the sample Grad-CAM image
+model/
+  exploration.py          dataset exploration + plots
+  preprocessing.py        cropping, CLAHE, normalisation, splits
+  train_baseline_cnn.py   custom CNN
+  train_resnet50.py       ResNet-50 transfer learning
+  gradcam.py              Grad-CAM explainability
+  app.py                  Gradio demo app
+  requirements.txt
+dashboard/                Next.js + Tailwind + shadcn/ui front end
 ```
+
+The dataset, trained weights (`*.pth`) and generated results are not committed because of their size.
+
+## Tech stack
+
+PyTorch · torchvision · OpenCV · scikit-learn · Gradio · Next.js · Tailwind CSS · shadcn/ui
+
+## Ethics and limitations
+
+- Predictions are based on the image alone. No demographic data is used as model input.
+- The system is meant to **assist** clinicians, not replace them.
+- Future work: EfficientNet backbones, cross-dataset testing (IDRiD), better sensitivity for early-stage disease, and studies of where humans and the model disagree.
 
 ## Disclaimer
 
-This is a research and educational project, **not a medical device**. Its output must not be used for diagnosis. Always consult a qualified ophthalmologist.
+This is a research and educational project, **not a medical device**. Do not use it for clinical diagnosis without professional supervision.
